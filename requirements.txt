@@ -1,0 +1,7 @@
+laya>=0.3.21
+torch>=2.14
+transformers>=5.0
+safetensors
+huggingface_hub>=1.0
+pybullet
+numpy

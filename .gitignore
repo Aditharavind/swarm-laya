@@ -1,0 +1,6 @@
+data/*.jsonl
+data/preprocessed/
+checkpoints/
+__pycache__/
+*.pyc
+.venv/

@@ -1,4 +1,4 @@
-# Swarm-Laya: A Lightweight Perception-and-Decision Architecture for Swarm Robotics, Built by Fine-Tuning Laya
+# Swarm-Laya: Fine-Tuning Laya as a Lightweight Decision Core for Swarm Robotics
 
 **Adith Ravindranath** (independent)
 
@@ -9,8 +9,7 @@ from simulation only (PyBullet); no physical robots were used.*
 
 Code: [github.com/Aditharavind/swarm-laya](https://github.com/Aditharavind/swarm-laya) ·
 Dataset: [huggingface.co/datasets/Aditharavind/swarm-laya-decisions](https://huggingface.co/datasets/Aditharavind/swarm-laya-decisions) ·
-Decision model: [huggingface.co/Aditharavind/swarm-laya](https://huggingface.co/Aditharavind/swarm-laya) ·
-Vision model: [huggingface.co/Aditharavind/swarm-laya-vision](https://huggingface.co/Aditharavind/swarm-laya-vision)
+Decision model: [huggingface.co/Aditharavind/swarm-laya](https://huggingface.co/Aditharavind/swarm-laya)
 
 ## Abstract
 
@@ -18,26 +17,21 @@ Swarm robotics requires autonomous agents to make fast, context-aware
 decisions under uncertainty: noisy sensors, unreliable communication, and
 finite battery, all while avoiding collisions and completing a shared task.
 This paper presents Swarm-Laya, a lightweight decision-making architecture
-that separates visual perception from decision-making, per the design goal
-of combining a lightweight vision module with a specialized decision model
-operating on structured state. We build an automated synthetic-data
-pipeline — a PyBullet swarm simulator paired with a hand-coded
-potential-field expert policy — to generate labeled per-robot decisions
-without manual annotation, and use it to fine-tune Laya (Nandhakishor M), a
-non-autoregressive typed-decision model, via reinforcement learning against
-proper scoring rules (RLCD). We further build a ~137K-parameter convolutional
-network that estimates the visually-observable parts of a robot's state
-(nearby obstacle and teammate distance/bearing) from a rendered first-person
-camera frame, completing the perception-plus-decision architecture. Across
-5,368 training states, four epochs, and a single 6GB consumer GPU, the
-fine-tuned decision model reaches 83.1% decision accuracy in-distribution
-and 90.2% on swarm configurations excluded from training. In closed-loop
-simulator rollouts, replacing ground-truth state with vision-estimated state
-lowers collision rate (2.0% vs. 6.0% in-distribution) but sharply reduces
-task completion (4.3% vs. 17.4%), a genuine and, we argue, underreported
-perception-limits-performance tradeoff that end-to-end evaluation is
-specifically designed to surface. We release the full pipeline, dataset,
-and both model checkpoints as open source.
+for swarm robotics built by fine-tuning Laya (Nandhakishor M), a
+non-autoregressive typed-decision model, on an automated synthetic-data
+pipeline. A PyBullet swarm simulator paired with a hand-coded
+potential-field expert policy generates labeled per-robot decisions without
+manual annotation, and Laya is fine-tuned on that data via reinforcement
+learning against proper scoring rules (RLCD). Across 5,368 training states,
+four epochs, and a single 6GB consumer GPU, the fine-tuned decision model
+reaches 83.1% decision accuracy in-distribution and 90.2% on swarm
+configurations excluded from training, at ~32ms per decision. In closed-loop
+simulator rollouts — the model, not the hand-coded expert, actually driving
+every robot each step — we measure collision rate and task completion rate
+against the expert-policy oracle, both in-distribution and on unseen swarm
+sizes, to evaluate the decision model as a controller rather than as a
+classifier in isolation. We release the full pipeline, dataset, and model
+checkpoint as open source.
 
 ## 1. Introduction
 
@@ -47,22 +41,15 @@ in my way? Is my battery low enough that I should turn back? Am I stuck or
 uncertain enough that I should ask a teammate for help? Should I just wait?*
 Classical approaches encode each of these as a hand-tuned rule or a
 potential field; learned approaches typically train an end-to-end policy
-network per task. Both are workable, but neither cleanly separates *what a
-robot perceives* from *what a robot decides*, which makes the resulting
-system harder to debug, harder to re-target to a new task, and harder to
-reason about when something goes wrong.
-
-This project starts from a different premise, following the design pattern
-of [Laya](https://github.com/NandhaKishorM/laya): treat "what should this
-agent do" as a **typed decision** — a fixed-option multiple-choice question
-answered in a single forward pass, not a token-by-token generation — and
-keep that decision model entirely separate from whatever perceives the
-world. Laya was built for text (support tickets, agent traces, customer
-service), not robotics; this paper's contribution is showing that its
-*fine-tuning recipe*, not just the model, transfers cleanly to a physically
-grounded, closed-loop control setting, and that doing so end to end
-(perception included) surfaces a tradeoff that a decision-accuracy number
-alone would hide.
+network per task. This project takes a third path, following the design
+pattern of [Laya](https://github.com/NandhaKishorM/laya): treat "what
+should this agent do" as a **typed decision** — a fixed-option
+multiple-choice question answered in a single forward pass, not a
+token-by-token generation. Laya was built for text (support tickets, agent
+traces, customer service), not robotics; this paper's contribution is
+showing that its *fine-tuning recipe*, not just the model, transfers
+cleanly to a physically grounded, closed-loop control setting, and that
+evaluating it as a controller — not just a classifier — matters.
 
 **Contributions.**
 
@@ -73,15 +60,10 @@ alone would hide.
 2. A practical recipe for fine-tuning a 421M-parameter encoder via RLCD on
    a single 6GB consumer GPU, where plain fp32 AdamW does not fit, using
    8-bit optimizer states.
-3. A ~137K-parameter vision module, trained from scratch, that estimates
-   the visually-observable subset of a robot's state from a rendered
-   egocentric camera frame, while keeping non-visual quantities (battery,
-   radio link, target direction) as telemetry — mirroring how real robots
-   fuse camera with IMU/GPS/radio.
-4. An end-to-end evaluation, not just of the decision model in isolation,
-   that quantifies exactly how much a real (imperfect) perception module
-   degrades closed-loop task performance relative to ground truth,
-   including on swarm configurations never seen during training.
+3. A closed-loop rollout evaluation of the fine-tuned decision model —
+   collision rate and task completion rate with the model actually driving
+   every robot, not just its accuracy against held-out labels — both
+   in-distribution and on swarm configurations never seen during training.
 
 ## 2. Related Work
 
@@ -104,17 +86,6 @@ scoring candidate actions by combining attractive (target, base) and
 repulsive (obstacle, crowding) terms. This is a well-understood, cheap-to-run
 technique, chosen deliberately for its simplicity: it is not a contribution
 of this work, only a labeling mechanism.
-
-**Sim-to-real and perception-action separation.** A large body of robotics
-work trains vision-to-action policies end to end; a smaller but relevant
-line separates perception (state estimation from sensors) from a downstream
-controller that consumes structured state, closer to classical robotics
-pipelines. This paper follows the latter pattern specifically so that the
-decision model's typed-question interface stays identical whether its input
-comes from a simulator's privileged state or from a real perception stack —
-in principle, a real robot's IMU/GPS/radio telemetry, plus any object
-detector estimating the same obstacle/teammate fields, could feed the same
-decision model unchanged.
 
 ## 3. Method
 
@@ -166,34 +137,6 @@ memory for free. Training ran 4 epochs, micro-batch 2, gradient accumulation
 per-question-type temperature calibration, exactly as Laya's own recipe
 does.
 
-### 3.3 Vision module
-
-The vision module (`vision/`) is a deliberately small convolutional network
-— four stride-2 convolutional blocks, global average pooling, two linear
-heads, ~137K parameters, trained from scratch with no pretrained backbone —
-that reads a 64×64 RGB frame rendered from a simulated robot-mounted camera
-(90° field of view, facing the robot's current heading) and predicts, for
-the nearest obstacle and the nearest teammate: whether it is visible in
-frame, its distance, and its bearing relative to the robot's own heading
-(predicted as `(sin, cos)` to avoid angle-wraparound discontinuities).
-Crucially, the module is scoped to only the *visually-observable* subset of
-the state. Battery percentage, radio-link status, and target/base direction
-are not camera-derived in this design — a camera cannot see a robot's own
-battery level — and remain telemetry, mirroring how a real robot fuses a
-camera with IMU, GPS, and radio. Supervision comes from the simulator's
-privileged state (ground-truth visibility, distance, and bearing), the same
-teacher-signal pattern used for the decision model's expert policy. Training
-used 12,112 labeled frames (150 episodes, plus 30 generalization episodes
-for evaluation only), 15 epochs, binary cross-entropy for visibility and
-masked mean-squared error for distance/bearing/radius (masked so an
-occluded object's placeholder value is never a training target).
-
-At inference time, `vision/perceive.py` composes a complete state for the
-decision model by combining the vision module's obstacle/teammate estimates
-with ground-truth telemetry for everything else — the same JSON schema the
-decision model was trained on, so no retraining or schema change was needed
-to swap the perception source.
-
 ## 4. Experimental Setup
 
 All experiments run on a single 6GB RTX 3060. We report two kinds of
@@ -202,20 +145,17 @@ action against the expert's arg-max label, on 611 in-distribution test
 states and 2,000 generalization states (a random sample of the 24,650
 generated), reporting per-decision latency alongside accuracy. **Closed-loop
 rollout**: 15 simulated episodes per condition (25 steps each, capped for
-evaluation throughput), where either the expert policy, the fine-tuned
-decision model reading ground-truth state, or the fine-tuned decision model
-reading vision-estimated state drives every robot's action each step. We
-report collision rate (fraction of robot-steps ending in a collision) and
-task completion rate (fraction of robots reaching the target within the
-episode), each computed identically across policies so comparisons are
-apples-to-apples under the same random scenario seeds. Because episodes are
-capped at 25 steps for evaluation speed, absolute completion rates should be
-read as a policy-vs-policy comparison under identical conditions, not as a
-measure of real-world task success.
+evaluation throughput), where either the expert policy or the fine-tuned
+decision model drives every robot's action each step. We report collision
+rate (fraction of robot-steps ending in a collision) and task completion
+rate (fraction of robots reaching the target within the episode), each
+computed identically across policies so comparisons are apples-to-apples
+under the same random scenario seeds. Because episodes are capped at 25
+steps for evaluation speed, absolute completion rates should be read as a
+policy-vs-policy comparison under identical conditions, not as a measure of
+real-world task success.
 
 ## 5. Results
-
-### 5.1 Decision accuracy and latency
 
 ![Swarm-Laya results](results_card.png)
 
@@ -235,48 +175,20 @@ accuracy is uneven: `move_to_target` and `request_swarm_help` exceed 99%,
 while `hold_position` sits at 4–5% — the rarest action in the training
 distribution (582 of ~24k rows before balancing).
 
-### 5.2 Vision-based perception: standalone accuracy
-
-The vision module's own perception accuracy, measured against the
-simulator's ground truth:
-
-| | In-distribution | Unseen swarms |
-|---|---|---|
-| Obstacle-visibility accuracy | 86.7% | 72.2% |
-| Teammate-visibility accuracy | 78.1% | 64.9% |
-| Obstacle clearance MAE | 0.40 m | 0.55 m |
-| Teammate distance MAE | 0.71 m | 0.96 m |
-
-### 5.3 With vision vs. without vision: the end-to-end tradeoff
-
-![With vision vs. without vision](vision_comparison_card.png)
-
-| | Collision rate: ground truth vs. vision | Task completion: ground truth vs. vision |
-|---|---|---|
-| In-distribution | 6.0% vs. 2.0% | 17.4% vs. 4.3% |
-| Unseen swarms | 6.9% vs. 4.9% | 15.0% vs. 3.6% |
-
-This is the paper's central empirical finding. Replacing ground-truth state
-with vision-estimated state *lowers* the collision rate — a plausible
-mechanism is that an imperfect vision module more often reports "nothing
-visible," and the decision model responds to that uncertainty by picking a
-more conservative action — but it *sharply reduces* task completion. The
-decision model was fine-tuned exclusively on ground-truth state; the noise
-distribution vision introduces is out-of-distribution for it twice over
-(the model has never seen mis-estimated obstacle clearances at training
-time, and the simulator's expert-policy labels were also generated from
-ground truth). We report this as a genuine limitation rather than papering
-over it with a rosier framing: a lightweight vision module and a decision
-model trained separately do not automatically compose into a robust
-end-to-end system, even when both components work well in isolation.
+The rollout numbers put the accuracy figure in context: the fine-tuned
+model's collision rate is higher than the hand-coded expert's in both
+regimes, and its task completion is close to but not above the expert's.
+The 83–90% decision accuracy against expert labels does not, on its own,
+say how the model behaves as a closed-loop controller — measuring both is
+the point of reporting them together.
 
 ## 6. Discussion and Limitations
 
 **Simulation only.** Every number in this paper comes from a PyBullet
 simulator. No physical robot, camera, radio, or battery was used at any
 point. The sim-to-real gap — real sensor noise characteristics, actuation
-delay, contact dynamics, real camera optics and lighting — is entirely
-untested, and we make no claim about how these results would transfer.
+delay, contact dynamics — is entirely untested, and we make no claim about
+how these results would transfer.
 
 **Single run.** All numbers come from one fine-tuning run and one
 evaluation run at each configuration; we did not measure variance across
@@ -288,13 +200,6 @@ evaluation throughput on a single consumer GPU, not because it reflects a
 realistic mission length; absolute task-completion numbers are lower than a
 longer-horizon evaluation would show for every policy, expert included.
 
-**The vision-decision composition gap.** As detailed in §5.3, the single
-largest opportunity for improvement is not either component in isolation,
-but training the decision model on vision-composed (not only ground-truth)
-states, so that the noise distribution it sees at inference time is not
-novel. We consider this the most important open problem this paper
-surfaces, not a footnote.
-
 **Physical plausibility of the reactive controller.** The simulator's
 collision response is a simple "bounce back to previous position," and
 robot movement is a single reactive heading vector per step with no local
@@ -303,6 +208,12 @@ dense obstacle cluster can become permanently stuck even when the decision
 model correctly judges it should move — a failure of the low-level
 controller, not the decision model, but one that is visible in this
 project's own demo recordings and worth stating plainly.
+
+**Perception.** This paper evaluates the decision model against
+ground-truth simulator state throughout. It does not address how the model
+would perform if its input state were estimated from a real or simulated
+sensor rather than read directly from the simulator; that is a separate,
+open question this paper does not attempt to answer.
 
 **Naming and scope.** Swarm-Laya is an independent, unofficial fine-tune,
 built with no involvement from Laya's author or team. We flag this
@@ -316,15 +227,14 @@ independent piece of work rather than an official extension.
 
 Fine-tuning a text-domain typed-decision model for closed-loop robot
 control works, cleanly, on hardware far smaller than the model's own
-published training setup assumed — but doing the fine-tuning is the easy
-half. The harder and more useful result in this paper is the end-to-end
-one: measuring, honestly, how much a realistic (imperfect) perception
-module degrades a decision model that has only ever seen perfect
-information, rather than reporting decision accuracy on ground truth alone
-and calling the system done. We release the full pipeline — simulator,
-expert policy, fine-tuning code, vision module, and evaluation harness — so
-this gap is reproducible and, we hope, closable by future work rather than
-left implicit.
+published training setup assumed. The more useful result in this paper is
+not the accuracy number alone but the rollout evaluation alongside it:
+decision accuracy against expert labels and closed-loop controller behavior
+are related but distinct questions, and reporting only the first would have
+overstated how ready the system is to actually drive a swarm. We release
+the full pipeline — simulator, expert policy, fine-tuning code, and
+evaluation harness — so these numbers are reproducible and extendable by
+future work.
 
 ## Acknowledgments
 

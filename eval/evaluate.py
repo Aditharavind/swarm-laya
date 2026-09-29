@@ -85,7 +85,8 @@ def model_choose_action(agent, state: dict) -> str:
     return result["answers"]["next_action"]["choice"]
 
 
-def run_rollout_episode(env: SwarmEnv, rng: random.Random, family: str, policy: str, agent=None) -> dict:
+def run_rollout_episode(env: SwarmEnv, rng: random.Random, family: str, policy: str, agent=None,
+                         perceiver=None) -> dict:
     config = sample_scenario(rng, family)
     env.reset(config, rng=rng)
     n_robots = len(env.robots)
@@ -99,6 +100,9 @@ def run_rollout_episode(env: SwarmEnv, rng: random.Random, family: str, policy: 
             sensed = env.sensed_position(robot, rng)
             if policy == "expert":
                 action, _ = label_state(env, robot, sensed, rng)
+            elif policy == "model_vision":
+                state = perceiver.perceive_state(env, robot, sensed, rng)
+                action = model_choose_action(agent, state)
             else:
                 state = encode_state(env, robot, sensed, rng)
                 action = model_choose_action(agent, state)
@@ -122,14 +126,14 @@ def run_rollout_episode(env: SwarmEnv, rng: random.Random, family: str, policy: 
     }
 
 
-def rollout_eval(agent, n_episodes: int, family: str, seed: int) -> dict:
+def rollout_eval(agent, n_episodes: int, family: str, seed: int, perceiver=None) -> dict:
     env = SwarmEnv(gui=False)
-    rng = random.Random(seed)
-    results = {"expert": [], "model": []}
-    for policy in ["expert", "model"]:
-        r = random.Random(seed)  # same scenario sequence for both policies
+    policies = ["expert", "model"] + (["model_vision"] if perceiver is not None else [])
+    results = {p: [] for p in policies}
+    for policy in policies:
+        r = random.Random(seed)  # same scenario sequence for every policy
         for _ in range(n_episodes):
-            results[policy].append(run_rollout_episode(env, r, family, policy, agent))
+            results[policy].append(run_rollout_episode(env, r, family, policy, agent, perceiver))
     env.close()
 
     def summarize(rows):
@@ -142,12 +146,11 @@ def rollout_eval(agent, n_episodes: int, family: str, seed: int) -> dict:
             "task_completion_rate": total_reached / max(1, total_robots),
         }
 
-    report = {"family": family, "n_episodes": n_episodes,
-              "expert": summarize(results["expert"]), "model": summarize(results["model"])}
-    print(f"[rollout:{family}] expert collision_rate={report['expert']['collision_rate']:.4f} "
-          f"completion={report['expert']['task_completion_rate']:.3f} | "
-          f"model collision_rate={report['model']['collision_rate']:.4f} "
-          f"completion={report['model']['task_completion_rate']:.3f}")
+    report = {"family": family, "n_episodes": n_episodes, **{p: summarize(results[p]) for p in policies}}
+    line = f"[rollout:{family}] " + " | ".join(
+        f"{p} collision_rate={report[p]['collision_rate']:.4f} completion={report[p]['task_completion_rate']:.3f}"
+        for p in policies)
+    print(line)
     return report
 
 
@@ -158,10 +161,19 @@ def main():
     ap.add_argument("--rollout-episodes", type=int, default=20)
     ap.add_argument("--seed", type=int, default=777)
     ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "..", "eval_report.json"))
+    ap.add_argument("--vision-checkpoint", default=None,
+                     help="optional path to a trained vision/train_vision.py checkpoint; when given, "
+                          "rollouts add a model_vision policy that perceives obstacles/teammates from "
+                          "a rendered camera frame instead of ground-truth state")
     args = ap.parse_args()
 
     import laya
     agent = laya.Agent(args.checkpoint, device="cuda" if _has_cuda() else "cpu")
+
+    perceiver = None
+    if args.vision_checkpoint:
+        from vision.perceive import VisionPerceiver
+        perceiver = VisionPerceiver(args.vision_checkpoint)
 
     report = {"checkpoint": args.checkpoint, "static": {}, "rollout": {}}
     report["static"]["test_in_distribution"] = static_eval(
@@ -170,8 +182,10 @@ def main():
     if os.path.exists(ood_path):
         report["static"]["ood_generalization"] = static_eval(agent, ood_path, "ood (generalization)")
 
-    report["rollout"]["in_distribution"] = rollout_eval(agent, args.rollout_episodes, "train", args.seed)
-    report["rollout"]["ood_generalization"] = rollout_eval(agent, args.rollout_episodes, "ood", args.seed + 1)
+    report["rollout"]["in_distribution"] = rollout_eval(agent, args.rollout_episodes, "train", args.seed,
+                                                         perceiver)
+    report["rollout"]["ood_generalization"] = rollout_eval(agent, args.rollout_episodes, "ood", args.seed + 1,
+                                                            perceiver)
 
     with open(args.out, "w") as f:
         json.dump(report, f, indent=2)

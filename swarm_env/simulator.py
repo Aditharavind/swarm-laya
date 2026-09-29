@@ -38,6 +38,7 @@ class RobotState:
     battery: float                # percent, 0-100
     comm_dropout: bool            # this robot's radio is currently degraded
     sensor_noise_std: float       # stddev (meters) of this robot's position sensing noise
+    heading: float = 0.0          # radians, direction the robot (and its onboard camera) faces
 
 
 @dataclasses.dataclass
@@ -124,8 +125,10 @@ class SwarmEnv:
             battery = rng.uniform(4.0, 100.0)
             comm_dropout = rng.random() < 0.15
             sensor_noise_std = rng.choice([0.0, 0.0, 0.05, 0.15, 0.4])
+            heading = rng.uniform(-math.pi, math.pi)
             self.robots.append(RobotState(robot_id=i, body_id=body, position=pos, battery=battery,
-                                           comm_dropout=comm_dropout, sensor_noise_std=sensor_noise_std))
+                                           comm_dropout=comm_dropout, sensor_noise_std=sensor_noise_std,
+                                           heading=heading))
         return config
 
     def _random_point(self, rng: random.Random) -> np.ndarray:
@@ -163,9 +166,12 @@ class SwarmEnv:
                     info["collided"] = True
                     new_pos = robot.position
 
+            if moving and not info["collided"]:
+                robot.heading = float(np.arctan2(action[1], action[0]))
             robot.position = new_pos
+            quat = p.getQuaternionFromEuler([0, 0, robot.heading])
             p.resetBasePositionAndOrientation(robot.body_id, [new_pos[0], new_pos[1], 0.3],
-                                               [0, 0, 0, 1], physicsClientId=self.client)
+                                               quat, physicsClientId=self.client)
 
             if moving and robot.battery > 0:
                 robot.battery = max(0.0, robot.battery - BATTERY_DRAIN_PER_STEP)
@@ -212,3 +218,26 @@ class SwarmEnv:
             return None
         other = min(others, key=lambda r: np.linalg.norm(robot.position - r.position))
         return other, float(np.linalg.norm(robot.position - other.position))
+
+    # ------------------------------------------------------------------ #
+    # Vision: onboard egocentric camera
+    # ------------------------------------------------------------------ #
+    def render_egocentric(self, robot: RobotState, img_size: int = 64, fov_deg: float = 90.0,
+                           max_range: float = 8.0) -> np.ndarray:
+        """A robot-mounted first-person camera frame, facing `robot.heading`.
+
+        Returns an (img_size, img_size, 3) uint8 RGB array. Uses PyBullet's
+        software renderer (works in headless DIRECT mode), fast enough
+        (~1ms/frame at 64x64) to generate large vision datasets.
+        """
+        eye_z = 0.35
+        eye = [robot.position[0], robot.position[1], eye_z]
+        forward = [math.cos(robot.heading), math.sin(robot.heading), 0.0]
+        target = [eye[0] + forward[0], eye[1] + forward[1], eye_z]
+        view = p.computeViewMatrix(cameraEyePosition=eye, cameraTargetPosition=target,
+                                    cameraUpVector=[0, 0, 1], physicsClientId=self.client)
+        proj = p.computeProjectionMatrixFOV(fov=fov_deg, aspect=1.0, nearVal=0.05, farVal=max_range,
+                                             physicsClientId=self.client)
+        _, _, rgb, _, _ = p.getCameraImage(img_size, img_size, view, proj,
+                                            renderer=p.ER_TINY_RENDERER, physicsClientId=self.client)
+        return np.reshape(rgb, (img_size, img_size, 4))[:, :, :3].astype(np.uint8)

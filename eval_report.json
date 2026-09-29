@@ -11,9 +11,9 @@
         "request_swarm_help": 1.0,
         "hold_position": 0.041666666666666664
       },
-      "latency_ms_p50": 32.602831999611226,
-      "latency_ms_p95": 33.40331600065838,
-      "latency_ms_mean": 33.23425880848108
+      "latency_ms_p50": 31.38924099948781,
+      "latency_ms_p95": 32.05115500077227,
+      "latency_ms_mean": 31.91474399675941
     },
     "ood_generalization": {
       "n": 2000,
@@ -25,34 +25,42 @@
         "request_swarm_help": 0.9980879541108987,
         "hold_position": 0.047619047619047616
       },
-      "latency_ms_p50": 33.96675749991118,
-      "latency_ms_p95": 38.27224890146681,
-      "latency_ms_mean": 35.15170907151969
+      "latency_ms_p50": 32.41419149981084,
+      "latency_ms_p95": 35.713247349303856,
+      "latency_ms_mean": 32.95123039897862
     }
   },
   "rollout": {
     "in_distribution": {
       "family": "train",
-      "n_episodes": 20,
+      "n_episodes": 15,
       "expert": {
-        "collision_rate": 0.02419753086419753,
-        "task_completion_rate": 0.19753086419753085
+        "collision_rate": 0.021449275362318842,
+        "task_completion_rate": 0.2028985507246377
       },
       "model": {
-        "collision_rate": 0.05382716049382716,
-        "task_completion_rate": 0.18518518518518517
+        "collision_rate": 0.06028985507246377,
+        "task_completion_rate": 0.17391304347826086
+      },
+      "model_vision": {
+        "collision_rate": 0.020289855072463767,
+        "task_completion_rate": 0.043478260869565216
       }
     },
     "ood_generalization": {
       "family": "ood",
-      "n_episodes": 20,
+      "n_episodes": 15,
       "expert": {
-        "collision_rate": 0.06087649402390438,
-        "task_completion_rate": 0.12350597609561753
+        "collision_rate": 0.03917098445595855,
+        "task_completion_rate": 0.11917098445595854
       },
       "model": {
-        "collision_rate": 0.12350597609561753,
-        "task_completion_rate": 0.14342629482071714
+        "collision_rate": 0.06922279792746114,
+        "task_completion_rate": 0.15025906735751296
+      },
+      "model_vision": {
+        "collision_rate": 0.0489119170984456,
+        "task_completion_rate": 0.03626943005181347
       }
     }
   }

@@ -1,8 +1,10 @@
 data/*.jsonl
 data/preprocessed/
+data/vision/
 checkpoints/
 __pycache__/
 *.pyc
 .venv/
 .claude/
 .claude*
+LINKEDIN_POST.md

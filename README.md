@@ -1,9 +1,10 @@
 # Swarm-Laya
 
-> **v1 — no vision.** This version decides from ground-truth structured state
-> (position, battery, distance/heading to target, nearest-obstacle clearance,
-> etc.), not from images. A robot-mounted-camera + lightweight-CNN vision
-> front end is the next phase — see [Roadmap](#roadmap).
+> **Simulation only.** Every number in this repo — decision accuracy,
+> collision rate, task completion, the vision model's perception accuracy —
+> comes from the PyBullet simulator described below, not from physical
+> robots. Sim-to-real gap (real sensor noise, actuation, latency, contact
+> dynamics) is untested.
 
 Fine-tunes [Laya](https://github.com/NandhaKishorM/laya) — a non-autoregressive
 "System 1" decision model that answers typed questions (`choice` / `score` /
@@ -11,8 +12,15 @@ Fine-tunes [Laya](https://github.com/NandhaKishorM/laya) — a non-autoregressiv
 in a synthetic swarm-robotics setting, per the project abstract: separate a
 lightweight vision/perception layer from a specialized decision model,
 trained on labeled data from an automated synthetic-data pipeline instead of
-costly real-world collection. This repo currently covers the decision half
-of that architecture end to end; the vision half is in progress.
+costly real-world collection. This repo covers both halves: the decision
+model (`swarm_env/`, `training/`) and a lightweight vision front end
+(`vision/`) that estimates the visually-observable parts of the state from a
+robot-mounted camera.
+
+**Pretrained on Hugging Face:**
+[dataset](https://huggingface.co/datasets/Aditharavind/swarm-laya-decisions) ·
+[decision model](https://huggingface.co/Aditharavind/swarm-laya) ·
+[vision model](https://huggingface.co/Aditharavind/swarm-laya-vision)
 
 ## Pipeline
 
@@ -21,6 +29,8 @@ swarm_env/            PyBullet swarm simulator, expert policy, state encoder, ac
 data_generation/      runs the simulator + expert policy, writes labeled Laya-format JSONL
 training/             preprocess.py (tokenize) + train.py (single-GPU RLCD fine-tuning)
 eval/                 decision accuracy, latency, collision rate, task completion, generalization
+vision/               lightweight CNN: camera frame -> obstacle/teammate perception -> Laya state
+hf/                   push the dataset/models to the Hugging Face Hub, with model cards
 ```
 
 ### 1. Generate the synthetic dataset
@@ -107,12 +117,15 @@ One fine-tuning run: 5,368 training states (300 episodes, 2-8 robots,
 | | in-distribution | unseen swarms (9-16 robots, 16-28 obstacles) |
 |---|---|---|
 | decision accuracy | 83.1% (n=611) | 90.2% (n=2,000) |
-| latency (p50 / p95) | 32.6 / 33.4 ms | 34.0 / 38.3 ms |
-| collision rate, expert vs. model | 2.4% vs. 5.4% | 6.1% vs. 12.4% |
-| task completion, expert vs. model | 19.8% vs. 18.5% | 12.4% vs. 14.3% |
+| latency (p50 / p95) | 31.4 / 32.1 ms | 32.4 / 35.7 ms |
+| collision rate, expert vs. model | 2.1% vs. 6.0% | 3.9% vs. 6.9% |
+| task completion, expert vs. model | 20.3% vs. 17.4% | 11.9% vs. 15.0% |
 
 `demo.mp4` is a top-down recording of the fine-tuned model driving every
-robot in three rollouts (two in-distribution, one unseen-swarm).
+robot in three rollouts (two in-distribution, one unseen-swarm) — the panel
+next to the arena shows the literal state JSON going into the model for one
+robot (rotating through the swarm) and every robot's predicted action +
+confidence, live.
 
 Reading the rollout numbers: episodes are capped at 25 steps for eval speed,
 which caps completion rate for both policies alike (many targets need more
@@ -124,6 +137,49 @@ model under-predicts it; more `hold_position` examples (or explicit
 upweighting) is the obvious next lever, along with an unbalanced test-set
 sanity check per `docs/finetune.md`'s advice to check per-workflow accuracy,
 not just the aggregate.
+
+## Vision front end
+
+`vision/` adds the perception half the abstract calls for: a **~137K-parameter
+CNN**, trained from scratch on PyBullet-rendered 64x64 first-person camera
+frames, that estimates the visually-observable parts of a robot's state —
+whether an obstacle/teammate is visible, its distance, and its bearing
+relative to the robot's own heading. Battery, radio-link status and target
+direction stay as telemetry (a camera can't see a robot's own battery
+percentage), matching how real robots fuse camera + IMU/GPS/radio.
+
+```bash
+python vision/generate_vision_dataset.py --out ./data/vision --episodes 150 --ood-episodes 30
+python vision/train_vision.py --data-dir ./data/vision --out ./checkpoints/swarm_vision.pt
+python eval/evaluate.py --checkpoint ./checkpoints/swarm_laya \
+    --vision-checkpoint ./checkpoints/swarm_vision.pt   # adds a model_vision rollout policy
+```
+
+**Vision model, standalone** (12,112 training frames, 15 epochs):
+
+| | in-distribution | unseen swarms |
+|---|---|---|
+| obstacle-visibility accuracy | 86.7% | 72.2% |
+| teammate-visibility accuracy | 78.1% | 64.9% |
+| obstacle clearance MAE | 0.40 m | 0.55 m |
+| teammate distance MAE | 0.71 m | 0.96 m |
+
+**What happens when Laya decides from vision instead of ground truth**
+(closed-loop rollout, same 25-step cap):
+
+| | collision rate: ground truth vs. vision | task completion: ground truth vs. vision |
+|---|---|---|
+| in-distribution | 6.0% vs. 2.0% | 17.4% vs. 4.3% |
+| unseen swarms | 6.9% vs. 4.9% | 15.0% vs. 3.6% |
+
+**Honest finding, not a hidden one:** vision-based perception *lowers* the
+collision rate — the decision model gets more cautious when it can't clearly
+see what's around it — but *cuts task completion sharply*. That's a genuine
+perception-limits-performance tradeoff, exactly what re-evaluating end to end
+was supposed to surface. The obvious next levers: a wider camera FOV, a
+second camera facing backward, or training the decision model itself on
+vision-composed states (right now it's only ever seen ground truth at
+training time, so vision's noise is out-of-distribution for it twice over).
 
 ## Design notes
 
@@ -154,12 +210,16 @@ not just the aggregate.
 - [x] Synthetic data generation (PyBullet + potential-field expert)
 - [x] RLCD fine-tuning on a single 6GB consumer GPU
 - [x] Static + closed-loop rollout evaluation, in-distribution and OOD
-- [ ] **Vision front end** — a lightweight CNN reading a robot-mounted
+- [x] **Vision front end** — a lightweight CNN reading a robot-mounted
       first-person camera, estimating the visually-observable parts of the
       state (nearest obstacle/teammate distance + bearing) while battery,
-      radio link and target direction stay as non-visual telemetry, exactly
-      as real robots fuse camera + IMU/GPS/radio. Feeds into the same
-      typed-decision schema this repo already trains against.
-- [ ] Re-evaluate end to end with vision-estimated (noisy) state in place of
-      ground truth, to measure how much the full perception+decision stack
-      degrades versus the ground-truth numbers above.
+      radio link and target direction stay as non-visual telemetry
+- [x] Re-evaluated end to end with vision-estimated (noisy) state in place of
+      ground truth — see [Vision front end](#vision-front-end) above
+- [ ] Train the decision model itself on vision-composed (not just
+      ground-truth) states, so it isn't seeing out-of-distribution noise
+      for the first time at inference
+- [ ] A local escape/replanning behavior for robots boxed in by a dense
+      obstacle cluster — the current single-step reactive heading can get a
+      robot permanently stuck if every direction collides
+- [ ] Real-robot validation (sim-to-real is completely untested right now)

@@ -11,6 +11,11 @@ datasets:
 
 # swarm-laya-vision
 
+*Part of Swarm-Laya, an unofficial, independent fine-tune of
+[Laya](https://github.com/NandhaKishorM/laya) by Nandhakishor M — not
+affiliated with or endorsed by the original project. This specific model is
+a from-scratch CNN, not a Laya derivative itself.*
+
 > **Simulation-only.** Trained and evaluated entirely on PyBullet-rendered
 > camera frames — not tested on a physical camera. See
 > [Aditharavind/swarm-laya](https://github.com/Aditharavind/swarm-laya) for

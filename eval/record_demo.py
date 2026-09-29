@@ -112,6 +112,8 @@ def render_arena(env: SwarmEnv, flash: dict, decisions: dict, focus_id: int):
                     (255, 255, 255), 1, cv2.LINE_AA)
 
     label = f"{len(env.robots)} robots | {len(env.obstacles)} obstacles"
+    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+    cv2.rectangle(frame, (8, ARENA_SIZE - 16 - th - 8), (8 + tw + 12, ARENA_SIZE - 4), (20, 20, 20), -1)
     cv2.putText(frame, label, (14, ARENA_SIZE - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
     return frame
 

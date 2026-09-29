@@ -15,6 +15,12 @@ size_categories:
 
 # Swarm-Laya Decisions
 
+*Part of Swarm-Laya, an unofficial, independent fine-tune of
+[Laya](https://github.com/NandhaKishorM/laya) by Nandhakishor M — not
+affiliated with or endorsed by the original project. This dataset is wholly
+original synthetic data, generated independently, not derived from any
+Laya-provided materials.*
+
 > **Simulation-only.** Generated entirely in a PyBullet swarm simulator — no
 > physical robots or real sensors were involved. See
 > [Aditharavind/swarm-laya](https://github.com/Aditharavind/swarm-laya) for

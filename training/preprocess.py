@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Tokenize the Swarm-Laya JSONL dataset into training items.
 
-Mirrors the preprocessing cell of Laya's official fine-tuning notebook
-(`notebooks/laya_finetune_typed_decisions_2xT4_kaggle.ipynb`, cell 6), but
-reads local JSONL rows (`state`, `questions`, `gold`) produced by
+Adapted from the preprocessing cell of Laya's official fine-tuning notebook
+(https://github.com/NandhaKishorM/laya/blob/main/notebooks/laya_finetune_typed_decisions_2xT4_kaggle.ipynb,
+cell 6, Apache License 2.0). Changed from the original: reads local JSONL
+rows (`state`, `questions`, `gold`) produced by
 `data_generation/generate_dataset.py` instead of the `LocalLLaMA/typed-decisions`
-Hub dataset.
+Hub dataset; everything else (the `build_training_item` logic, calling
+`laya.common.build_sequence`/`render_options`) is unchanged.
 """
 from __future__ import annotations
 

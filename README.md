@@ -1,26 +1,35 @@
 # Swarm-Laya
 
+*An unofficial, independent fine-tune of [Laya](https://github.com/NandhaKishorM/laya)
+by Nandhakishor M — not affiliated with or endorsed by the original project.*
+
 > **Simulation only.** Every number in this repo — decision accuracy,
 > collision rate, task completion, the vision model's perception accuracy —
 > comes from the PyBullet simulator described below, not from physical
 > robots. Sim-to-real gap (real sensor noise, actuation, latency, contact
 > dynamics) is untested.
 
-Fine-tunes [Laya](https://github.com/NandhaKishorM/laya) — a non-autoregressive
-"System 1" decision model that answers typed questions (`choice` / `score` /
-`noul`) over a state in a single forward pass — to make per-robot decisions
-in a synthetic swarm-robotics setting, per the project abstract: separate a
-lightweight vision/perception layer from a specialized decision model,
-trained on labeled data from an automated synthetic-data pipeline instead of
-costly real-world collection. This repo covers both halves: the decision
-model (`swarm_env/`, `training/`) and a lightweight vision front end
-(`vision/`) that estimates the visually-observable parts of the state from a
-robot-mounted camera.
+Fine-tunes [Laya](https://github.com/NandhaKishorM/laya) (by Nandhakishor M /
+Convai Innovations) — a non-autoregressive "System 1" decision model that
+answers typed questions (`choice` / `score` / `noul`) over a state in a
+single forward pass — to make per-robot decisions in a synthetic
+swarm-robotics setting, per the project abstract: separate a lightweight
+vision/perception layer from a specialized decision model, trained on
+labeled data from an automated synthetic-data pipeline instead of costly
+real-world collection. This repo covers both halves: the decision model
+(`swarm_env/`, `training/`) and a lightweight vision front end (`vision/`)
+that estimates the visually-observable parts of the state from a
+robot-mounted camera. All Swarm-Laya-specific code here (simulator, expert
+policy, vision model) is original; the fine-tuning recipe (`training/train.py`)
+is adapted from Laya's own [fine-tuning notebook](https://github.com/NandhaKishorM/laya/blob/main/notebooks/laya_finetune_typed_decisions_2xT4_kaggle.ipynb) — see the header comment in that file for exactly what changed.
 
 **Pretrained on Hugging Face:**
 [dataset](https://huggingface.co/datasets/Aditharavind/swarm-laya-decisions) ·
 [decision model](https://huggingface.co/Aditharavind/swarm-laya) ·
 [vision model](https://huggingface.co/Aditharavind/swarm-laya-vision)
+
+**[Read the full paper](PAPER.md)** — method, related work, and a fuller
+discussion of the results (and their limitations) than this README covers.
 
 ## Pipeline
 
@@ -175,10 +184,18 @@ perfect) obstacle/teammate estimate for that frame, instead of raw JSON.
 **What happens when Laya decides from vision instead of ground truth**
 (closed-loop rollout, same 25-step cap):
 
+![With vision vs. without vision](vision_comparison_card.png)
+
 | | collision rate: ground truth vs. vision | task completion: ground truth vs. vision |
 |---|---|---|
 | in-distribution | 6.0% vs. 2.0% | 17.4% vs. 4.3% |
 | unseen swarms | 6.9% vs. 4.9% | 15.0% vs. 3.6% |
+
+`demo_vision.mp4` shows this live: the panel next to the arena is the
+robot's actual camera frame plus the vision model's real (sometimes wrong)
+obstacle/teammate estimate for that exact frame, side by side with the
+decision it produces. Regenerate the chart above with
+`python eval/make_vision_comparison_card.py`.
 
 **Honest finding, not a hidden one:** vision-based perception *lowers* the
 collision rate — the decision model gets more cautious when it can't clearly

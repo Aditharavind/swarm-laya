@@ -2,12 +2,15 @@
 """Single-GPU RLCD fine-tuning of Laya on the Swarm-Laya dataset.
 
 Adapted from Laya's official 2xT4 DDP notebook
-(`notebooks/laya_finetune_typed_decisions_2xT4_kaggle.ipynb`, cell 8) for a
-single consumer GPU. The RLCD loss (GRPO-style policy gradient over proper
-scoring rules + soft cross-entropy) is unchanged; what's dropped is
-`torch.distributed`/DDP, and batch sizes are sized down for a 6 GB card
-instead of a 16 GB T4 (gradient checkpointing was already required there, so
-this only tightens micro-batch size and accumulation further).
+(https://github.com/NandhaKishorM/laya/blob/main/notebooks/laya_finetune_typed_decisions_2xT4_kaggle.ipynb,
+cell 8, Apache License 2.0) for a single consumer GPU. Changed from the
+original: `torch.distributed`/DDP removed entirely (single process, no
+`torchrun`); batch sizes sized down for a 6 GB card instead of a 16 GB T4
+(gradient checkpointing was already required there, so this only tightens
+micro-batch size and accumulation further); optimizer switched to
+bitsandbytes' 8-bit AdamW, which the original notebook does not use. The
+RLCD loss itself (GRPO-style policy gradient over proper scoring rules +
+soft cross-entropy) is unchanged from the original.
 
 Run:
     python training/train.py --data-dir ../data/preprocessed --model-dir <from preprocess.py> \

@@ -1,6 +1,7 @@
 ---
 license: apache-2.0
 base_model: convaiinnovations/laya
+base_model_relation: finetune
 tags:
 - robotics
 - swarm-robotics
@@ -13,6 +14,10 @@ pipeline_tag: text-classification
 ---
 
 # swarm-laya
+
+*An unofficial, independent fine-tune of [Laya](https://github.com/NandhaKishorM/laya)
+by Nandhakishor M / Convai Innovations — not affiliated with or endorsed by
+the original project.*
 
 > **Simulation-only.** Fine-tuned and evaluated entirely in a PyBullet swarm
 > simulator — not tested on physical robots. See

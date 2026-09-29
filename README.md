@@ -1,13 +1,18 @@
 # Swarm-Laya
 
+> **v1 — no vision.** This version decides from ground-truth structured state
+> (position, battery, distance/heading to target, nearest-obstacle clearance,
+> etc.), not from images. A robot-mounted-camera + lightweight-CNN vision
+> front end is the next phase — see [Roadmap](#roadmap).
+
 Fine-tunes [Laya](https://github.com/NandhaKishorM/laya) — a non-autoregressive
 "System 1" decision model that answers typed questions (`choice` / `score` /
 `noul`) over a state in a single forward pass — to make per-robot decisions
 in a synthetic swarm-robotics setting, per the project abstract: separate a
-lightweight vision/perception layer (out of scope here; this project starts
-from structured state, not images) from a specialized decision model,
+lightweight vision/perception layer from a specialized decision model,
 trained on labeled data from an automated synthetic-data pipeline instead of
-costly real-world collection.
+costly real-world collection. This repo currently covers the decision half
+of that architecture end to end; the vision half is in progress.
 
 ## Pipeline
 
@@ -143,3 +148,18 @@ not just the aggregate.
   (2-8 robots, 3-14 obstacles), so its accuracy and rollout numbers are a
   genuine generalization measurement, not a held-out slice of the same
   distribution.
+
+## Roadmap
+
+- [x] Synthetic data generation (PyBullet + potential-field expert)
+- [x] RLCD fine-tuning on a single 6GB consumer GPU
+- [x] Static + closed-loop rollout evaluation, in-distribution and OOD
+- [ ] **Vision front end** — a lightweight CNN reading a robot-mounted
+      first-person camera, estimating the visually-observable parts of the
+      state (nearest obstacle/teammate distance + bearing) while battery,
+      radio link and target direction stay as non-visual telemetry, exactly
+      as real robots fuse camera + IMU/GPS/radio. Feeds into the same
+      typed-decision schema this repo already trains against.
+- [ ] Re-evaluate end to end with vision-estimated (noisy) state in place of
+      ground truth, to measure how much the full perception+decision stack
+      degrades versus the ground-truth numbers above.

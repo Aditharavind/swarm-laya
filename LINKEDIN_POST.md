@@ -16,6 +16,8 @@ Results from one fine-tuning run (5,368 synthetic states, 4 epochs, single 6GB G
 
 Full numbers, the results chart, and a demo video of it driving a swarm are in the repo.
 
+Note on this version: it decides from ground-truth structured state (position, battery, distance to target, nearest-obstacle clearance, etc.), not from camera images. A lightweight-CNN vision front end — robot-mounted camera → estimated obstacle/teammate distance+bearing → same decision model — is next; that's the part that actually separates "perception" from "decision" the way the original design called for.
+
 Code, dataset generator, training scripts and eval harness are open-source: https://github.com/Aditharavind/swarm-laya
 
 Built on top of @Laya (https://github.com/NandhaKishorM/laya) by Nandhakishor M — a genuinely clever piece of engineering: a typed-decision model that answers choice/score/yes-no questions in a single forward pass across 100+ languages, with a fine-tuning recipe that turns its zero-shot ~35% accuracy into 76%+ on domain data. Swarm-Laya is that same recipe pointed at robotics instead of text.

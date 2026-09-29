@@ -4,3 +4,5 @@ checkpoints/
 __pycache__/
 *.pyc
 .venv/
+.claude/
+.claude*

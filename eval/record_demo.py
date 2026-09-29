@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Render an overhead demo video of Swarm-Laya driving robots in the simulator.
+"""Render a 3-part demo video: arena, model input, model output, all live.
 
-Draws the target, obstacles (red), base (green ring) and robots (blue, with a
-short heading tick), colors a robot orange for the step it collides, and
-green once it reaches the target. Captures one PyBullet top-down frame per
-simulation step and encodes them to MP4 with imageio/ffmpeg.
+Left: overhead view (target=star, base=green ring, obstacles=red, robots
+colored by their current predicted action, flashing orange on collision /
+green on reaching the target; the focused robot gets a white ring). Top
+right: the literal JSON state Laya receives for the focused robot this step
+("model input"). Bottom right: one row per robot with its predicted action
+and confidence ("model output") — so the video reads as input -> model ->
+decision, not just robots moving around.
+
+Captures one PyBullet top-down frame per simulation step and encodes to MP4
+with imageio/ffmpeg.
 
 Usage:
     python eval/record_demo.py --checkpoint ../checkpoints/swarm_laya --out ../demo.mp4
@@ -26,11 +32,45 @@ from swarm_env import (  # noqa: E402
 )
 from swarm_env.simulator import ARENA_HALF_EXTENT  # noqa: E402
 
-IMG_SIZE = 720
+ARENA_SIZE = 720
+PANEL_W = 480
+IMG_H = ARENA_SIZE
+INPUT_PANEL_H = 320
+DECISIONS_PANEL_H = IMG_H - INPUT_PANEL_H
 EPISODE_STEPS = 40
 
+# Plain RGB (the arena frame comes straight from PyBullet as RGB, and every
+# panel array is built the same way, so all colors here must be RGB, NOT
+# cv2's usual BGR-from-imread convention -- imageio/PNG output expects RGB
+# and nothing in this pipeline ever converts color order).
+# From the dataviz skill's validated categorical palette.
+ACTION_COLORS = {
+    "move_to_target": (42, 120, 214),      # blue    #2a78d6
+    "avoid_obstacle": (235, 104, 52),      # orange  #eb6834
+    "return_to_base": (74, 58, 167),       # violet  #4a3aa7
+    "request_swarm_help": (27, 175, 122),  # aqua    #1baf7a
+    "hold_position": (227, 73, 72),        # red     #e34948
+}
+COLLIDED_COLOR = (255, 90, 0)
+REACHED_COLOR = (0, 200, 0)
+PANEL_BG = (250, 250, 249)
+INK = (10, 10, 10)
+MUTED = (90, 89, 82)
+ACTION_LABELS = {
+    "move_to_target": "Move to target", "avoid_obstacle": "Avoid obstacle",
+    "return_to_base": "Return to base", "request_swarm_help": "Request help",
+    "hold_position": "Hold position",
+}
 
-def render_frame(env: SwarmEnv, flash: dict) -> np.ndarray:
+
+def world_to_px(pos):
+    x = int((pos[0] + ARENA_HALF_EXTENT) / (2 * ARENA_HALF_EXTENT) * ARENA_SIZE)
+    y = int((1 - (pos[1] + ARENA_HALF_EXTENT) / (2 * ARENA_HALF_EXTENT)) * ARENA_SIZE)
+    return x, y
+
+
+def render_arena(env: SwarmEnv, flash: dict, decisions: dict, focus_id: int):
+    import cv2
     view = p.computeViewMatrix(
         cameraEyePosition=[0, 0, ARENA_HALF_EXTENT * 2.05],
         cameraTargetPosition=[0, 0, 0],
@@ -40,34 +80,107 @@ def render_frame(env: SwarmEnv, flash: dict) -> np.ndarray:
     proj = p.computeProjectionMatrixFOV(
         fov=2 * np.degrees(np.arctan(ARENA_HALF_EXTENT / (ARENA_HALF_EXTENT * 2.05))),
         aspect=1.0, nearVal=0.1, farVal=ARENA_HALF_EXTENT * 3, physicsClientId=env.client)
-    _, _, rgb, _, _ = p.getCameraImage(IMG_SIZE, IMG_SIZE, view, proj,
+    _, _, rgb, _, _ = p.getCameraImage(ARENA_SIZE, ARENA_SIZE, view, proj,
                                         renderer=p.ER_TINY_RENDERER, physicsClientId=env.client)
-    frame = np.reshape(rgb, (IMG_SIZE, IMG_SIZE, 4))[:, :, :3].astype(np.uint8).copy()
+    frame = np.reshape(rgb, (ARENA_SIZE, ARENA_SIZE, 4))[:, :, :3].astype(np.uint8).copy()
 
-    def world_to_px(pos):
-        x = int((pos[0] + ARENA_HALF_EXTENT) / (2 * ARENA_HALF_EXTENT) * IMG_SIZE)
-        y = int((1 - (pos[1] + ARENA_HALF_EXTENT) / (2 * ARENA_HALF_EXTENT)) * IMG_SIZE)
-        return x, y
-
-    import cv2
     tx, ty = world_to_px(env.target)
-    cv2.drawMarker(frame, (tx, ty), (255, 215, 0), markerType=cv2.MARKER_STAR, markerSize=26, thickness=3)
+    cv2.drawMarker(frame, (tx, ty), (0, 215, 255), markerType=cv2.MARKER_STAR, markerSize=26, thickness=3)
     bx, by = world_to_px(env.base)
     cv2.circle(frame, (bx, by), 16, (0, 220, 0), 3)
 
     for robot in env.robots:
         rx, ry = world_to_px(robot.position)
-        color = (60, 140, 255)
+        action = decisions.get(robot.robot_id, (None, 0.0))[0]
+        color = ACTION_COLORS.get(action, (60, 140, 255))
         if flash.get(robot.robot_id) == "collided":
-            color = (0, 100, 255)
+            color = COLLIDED_COLOR
         elif flash.get(robot.robot_id) == "reached":
-            color = (0, 220, 0)
-        cv2.circle(frame, (rx, ry), 9, color, -1)
-        cv2.circle(frame, (rx, ry), 9, (20, 20, 20), 1)
+            color = REACHED_COLOR
+        cv2.circle(frame, (rx, ry), 10, color, -1)
+        cv2.circle(frame, (rx, ry), 10, (20, 20, 20), 1)
+        if robot.robot_id == focus_id:
+            cv2.circle(frame, (rx, ry), 16, (255, 255, 255), 2)
+        cv2.putText(frame, str(robot.robot_id), (rx - 4, ry + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.35,
+                    (255, 255, 255), 1, cv2.LINE_AA)
 
-    label = f"battery-aware swarm navigation | {len(env.robots)} robots | {len(env.obstacles)} obstacles"
-    cv2.putText(frame, label, (14, IMG_SIZE - 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+    label = f"{len(env.robots)} robots | {len(env.obstacles)} obstacles"
+    cv2.putText(frame, label, (14, ARENA_SIZE - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
     return frame
+
+
+def _json_lines(state: dict) -> list:
+    lines = []
+    for key, val in state.items():
+        if isinstance(val, dict):
+            if val is None:
+                continue
+            inner = ", ".join(f"{k}: {v}" for k, v in val.items())
+            lines.append(f"{key}:")
+            lines.append(f"  {{{inner}}}")
+        elif val is None:
+            lines.append(f"{key}: null")
+        else:
+            lines.append(f"{key}: {val}")
+    return lines
+
+
+def render_input_panel(focus_id: int, state: dict):
+    import cv2
+    panel = np.full((INPUT_PANEL_H, PANEL_W, 3), PANEL_BG, dtype=np.uint8)
+    cv2.putText(panel, f"Model input -- state for robot {focus_id}", (18, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                INK, 2, cv2.LINE_AA)
+    cv2.line(panel, (18, 38), (PANEL_W - 18, 38), (220, 219, 214), 1)
+
+    lines = _json_lines(state) if state else ["(no state yet)"]
+    y = 60
+    row_h = 20
+    for line in lines:
+        if y > INPUT_PANEL_H - 10:
+            break
+        cv2.putText(panel, line, (20, y), cv2.FONT_HERSHEY_PLAIN, 1.0, MUTED, 1, cv2.LINE_AA)
+        y += row_h
+    return panel
+
+
+def render_decisions_panel(env: SwarmEnv, decisions: dict):
+    import cv2
+    panel = np.full((DECISIONS_PANEL_H, PANEL_W, 3), PANEL_BG, dtype=np.uint8)
+    cv2.putText(panel, "Model output -- predicted action", (18, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, INK, 2,
+                cv2.LINE_AA)
+    cv2.line(panel, (18, 42), (PANEL_W - 18, 42), (220, 219, 214), 1)
+
+    n = max(1, len(env.robots))
+    row_h = min(36, (DECISIONS_PANEL_H - 70) // n)
+    y = 72
+    for robot in sorted(env.robots, key=lambda r: r.robot_id):
+        action, conf = decisions.get(robot.robot_id, (None, 0.0))
+        color = ACTION_COLORS.get(action, (150, 150, 150))
+        cv2.circle(panel, (30, y - 6), 7, color, -1)
+        cv2.putText(panel, f"R{robot.robot_id}", (46, y), cv2.FONT_HERSHEY_SIMPLEX, 0.44, INK, 1, cv2.LINE_AA)
+        label = ACTION_LABELS.get(action, "-")
+        cv2.putText(panel, label, (100, y), cv2.FONT_HERSHEY_SIMPLEX, 0.44, INK, 1, cv2.LINE_AA)
+        cv2.putText(panel, f"{conf * 100:4.0f}%", (PANEL_W - 60, y), cv2.FONT_HERSHEY_SIMPLEX, 0.44, MUTED, 1,
+                    cv2.LINE_AA)
+        y += row_h
+        if y > DECISIONS_PANEL_H - 16:
+            break
+
+    cv2.putText(panel, "color = predicted action", (18, DECISIONS_PANEL_H - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.38,
+                MUTED, 1, cv2.LINE_AA)
+    return panel
+
+
+def compose_frame(env, flash, decisions, focus_id, focus_state):
+    arena = render_arena(env, flash, decisions, focus_id)
+    input_panel = render_input_panel(focus_id, focus_state)
+    decisions_panel = render_decisions_panel(env, decisions)
+    right = np.concatenate([input_panel, decisions_panel], axis=0)
+    return np.concatenate([arena, right], axis=1)
+
+
+FOCUS_ROTATE_EVERY = 4  # steps to hold on one robot before moving to the next, so the
+                         # "model input" panel visibly cycles through the swarm
 
 
 def run_recorded_episode(env: SwarmEnv, rng: random.Random, agent, family: str, hold_frames: int) -> list:
@@ -75,16 +188,26 @@ def run_recorded_episode(env: SwarmEnv, rng: random.Random, agent, family: str, 
     env.reset(config, rng=rng)
     frames = []
     flash: dict = {}
+    decisions: dict = {}
+    focus_id = env.robots[0].robot_id
+    focus_state: dict = {}
 
-    frames.extend([render_frame(env, flash)] * hold_frames)
-    for _ in range(EPISODE_STEPS):
+    frames.extend([compose_frame(env, flash, decisions, focus_id, focus_state)] * hold_frames)
+    for step in range(EPISODE_STEPS):
+        focus_idx = (step // FOCUS_ROTATE_EVERY) % len(env.robots)
+        focus_id = env.robots[focus_idx].robot_id
         actions = []
         flash = {}
+        decisions = {}
         for robot in env.robots:
             sensed = env.sensed_position(robot, rng)
             state = encode_state(env, robot, sensed, rng)
+            if robot.robot_id == focus_id:
+                focus_state = state
             result = agent.predict(state, QUESTIONS)
-            action = result["answers"]["next_action"]["choice"]
+            answer = result["answers"]["next_action"]
+            action = answer["choice"]
+            decisions[robot.robot_id] = (action, float(answer.get("answer_confidence", 0.0)))
             avoid_vec = avoid_vector_for(env, robot, sensed)
             actions.append(action_to_heading(action, sensed, env.target, env.base, avoid_vec))
         infos = env.step(actions)
@@ -93,10 +216,10 @@ def run_recorded_episode(env: SwarmEnv, rng: random.Random, agent, family: str, 
                 flash[info["robot_id"]] = "collided"
             elif info["reached_target"]:
                 flash[info["robot_id"]] = "reached"
-        frames.append(render_frame(env, flash))
+        frames.append(compose_frame(env, flash, decisions, focus_id, focus_state))
         if all(np.linalg.norm(r.position - env.target) < 0.5 for r in env.robots):
             break
-    frames.extend([render_frame(env, flash)] * hold_frames)
+    frames.extend([compose_frame(env, flash, decisions, focus_id, focus_state)] * hold_frames)
     return frames
 
 

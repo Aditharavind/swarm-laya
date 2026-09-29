@@ -153,7 +153,15 @@ python vision/generate_vision_dataset.py --out ./data/vision --episodes 150 --oo
 python vision/train_vision.py --data-dir ./data/vision --out ./checkpoints/swarm_vision.pt
 python eval/evaluate.py --checkpoint ./checkpoints/swarm_laya \
     --vision-checkpoint ./checkpoints/swarm_vision.pt   # adds a model_vision rollout policy
+python eval/record_demo.py --checkpoint ./checkpoints/swarm_laya \
+    --vision-checkpoint ./checkpoints/swarm_vision.pt --out ./demo_vision.mp4
 ```
+
+`demo_vision.mp4` is the same side-by-side format as `demo.mp4`, but every
+robot's action now comes from vision-perceived state, and the model-input
+panel shows the focused robot's actual camera frame plus the vision model's
+own (imperfect — matching the accuracy numbers below, not artificially
+perfect) obstacle/teammate estimate for that frame, instead of raw JSON.
 
 **Vision model, standalone** (12,112 training frames, 15 epochs):
 

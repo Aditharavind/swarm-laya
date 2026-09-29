@@ -4,16 +4,20 @@
 Left: overhead view (target=star, base=green ring, obstacles=red, robots
 colored by their current predicted action, flashing orange on collision /
 green on reaching the target; the focused robot gets a white ring). Top
-right: the literal JSON state Laya receives for the focused robot this step
-("model input"). Bottom right: one row per robot with its predicted action
-and confidence ("model output") — so the video reads as input -> model ->
-decision, not just robots moving around.
+right: the model's input for the focused robot this step -- either the
+literal JSON state ("model input") or, with `--vision-checkpoint`, the
+robot's actual first-person camera frame plus the vision model's estimated
+obstacle/teammate perception. Bottom right: one row per robot with its
+predicted action and confidence ("model output") — so the video reads as
+input -> model -> decision, not just robots moving around.
 
 Captures one PyBullet top-down frame per simulation step and encodes to MP4
 with imageio/ffmpeg.
 
 Usage:
     python eval/record_demo.py --checkpoint ../checkpoints/swarm_laya --out ../demo.mp4
+    python eval/record_demo.py --checkpoint ../checkpoints/swarm_laya \
+        --vision-checkpoint ../checkpoints/swarm_vision.pt --out ../demo_vision.mp4
 """
 from __future__ import annotations
 
@@ -31,6 +35,9 @@ from swarm_env import (  # noqa: E402
     encode_state, sample_scenario,
 )
 from swarm_env.simulator import ARENA_HALF_EXTENT  # noqa: E402
+
+CAMERA_IMG_SIZE = 64
+CAMERA_DISPLAY_SIZE = 220
 
 ARENA_SIZE = 720
 PANEL_W = 480
@@ -143,6 +150,37 @@ def render_input_panel(focus_id: int, state: dict):
     return panel
 
 
+def render_vision_input_panel(focus_id: int, camera_img, state: dict):
+    """Like render_input_panel, but shows the robot's actual camera frame
+    (what the vision CNN sees) plus its estimated obstacle/teammate fields,
+    instead of the full ground-truth JSON."""
+    import cv2
+    panel = np.full((INPUT_PANEL_H, PANEL_W, 3), PANEL_BG, dtype=np.uint8)
+    cv2.putText(panel, f"Camera input -- robot {focus_id}'s view", (18, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.52,
+                INK, 2, cv2.LINE_AA)
+    cv2.line(panel, (18, 36), (PANEL_W - 18, 36), (220, 219, 214), 1)
+
+    if camera_img is not None:
+        big = cv2.resize(camera_img, (CAMERA_DISPLAY_SIZE, CAMERA_DISPLAY_SIZE), interpolation=cv2.INTER_NEAREST)
+        x0 = (PANEL_W - CAMERA_DISPLAY_SIZE) // 2
+        y0 = 44
+        panel[y0:y0 + CAMERA_DISPLAY_SIZE, x0:x0 + CAMERA_DISPLAY_SIZE] = big
+        cv2.rectangle(panel, (x0, y0), (x0 + CAMERA_DISPLAY_SIZE, y0 + CAMERA_DISPLAY_SIZE), (200, 199, 194), 1)
+        text_y = y0 + CAMERA_DISPLAY_SIZE + 22
+    else:
+        text_y = 60
+
+    obs = state.get("nearest_obstacle") if state else None
+    team = state.get("nearest_teammate") if state else None
+    obs_line = (f"vision sees obstacle: {obs['clearance_m']}m clearance" if obs
+                else "vision sees obstacle: none in view")
+    team_line = (f"vision sees teammate: {team['distance_m']}m away" if team
+                 else "vision sees teammate: none in view")
+    cv2.putText(panel, obs_line, (20, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, MUTED, 1, cv2.LINE_AA)
+    cv2.putText(panel, team_line, (20, text_y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.42, MUTED, 1, cv2.LINE_AA)
+    return panel
+
+
 def render_decisions_panel(env: SwarmEnv, decisions: dict):
     import cv2
     panel = np.full((DECISIONS_PANEL_H, PANEL_W, 3), PANEL_BG, dtype=np.uint8)
@@ -171,9 +209,12 @@ def render_decisions_panel(env: SwarmEnv, decisions: dict):
     return panel
 
 
-def compose_frame(env, flash, decisions, focus_id, focus_state):
+def compose_frame(env, flash, decisions, focus_id, focus_state, focus_image=None):
     arena = render_arena(env, flash, decisions, focus_id)
-    input_panel = render_input_panel(focus_id, focus_state)
+    if focus_image is not None:
+        input_panel = render_vision_input_panel(focus_id, focus_image, focus_state)
+    else:
+        input_panel = render_input_panel(focus_id, focus_state)
     decisions_panel = render_decisions_panel(env, decisions)
     right = np.concatenate([input_panel, decisions_panel], axis=0)
     return np.concatenate([arena, right], axis=1)
@@ -183,7 +224,8 @@ FOCUS_ROTATE_EVERY = 4  # steps to hold on one robot before moving to the next, 
                          # "model input" panel visibly cycles through the swarm
 
 
-def run_recorded_episode(env: SwarmEnv, rng: random.Random, agent, family: str, hold_frames: int) -> list:
+def run_recorded_episode(env: SwarmEnv, rng: random.Random, agent, family: str, hold_frames: int,
+                          perceiver=None) -> list:
     config = sample_scenario(rng, family)
     env.reset(config, rng=rng)
     frames = []
@@ -191,8 +233,9 @@ def run_recorded_episode(env: SwarmEnv, rng: random.Random, agent, family: str, 
     decisions: dict = {}
     focus_id = env.robots[0].robot_id
     focus_state: dict = {}
+    focus_image = None
 
-    frames.extend([compose_frame(env, flash, decisions, focus_id, focus_state)] * hold_frames)
+    frames.extend([compose_frame(env, flash, decisions, focus_id, focus_state, focus_image)] * hold_frames)
     for step in range(EPISODE_STEPS):
         focus_idx = (step // FOCUS_ROTATE_EVERY) % len(env.robots)
         focus_id = env.robots[focus_idx].robot_id
@@ -201,7 +244,12 @@ def run_recorded_episode(env: SwarmEnv, rng: random.Random, agent, family: str, 
         decisions = {}
         for robot in env.robots:
             sensed = env.sensed_position(robot, rng)
-            state = encode_state(env, robot, sensed, rng)
+            if perceiver is not None:
+                state = perceiver.perceive_state(env, robot, sensed, rng)
+                if robot.robot_id == focus_id:
+                    focus_image = env.render_egocentric(robot, img_size=CAMERA_IMG_SIZE)
+            else:
+                state = encode_state(env, robot, sensed, rng)
             if robot.robot_id == focus_id:
                 focus_state = state
             result = agent.predict(state, QUESTIONS)
@@ -216,10 +264,10 @@ def run_recorded_episode(env: SwarmEnv, rng: random.Random, agent, family: str, 
                 flash[info["robot_id"]] = "collided"
             elif info["reached_target"]:
                 flash[info["robot_id"]] = "reached"
-        frames.append(compose_frame(env, flash, decisions, focus_id, focus_state))
+        frames.append(compose_frame(env, flash, decisions, focus_id, focus_state, focus_image))
         if all(np.linalg.norm(r.position - env.target) < 0.5 for r in env.robots):
             break
-    frames.extend([compose_frame(env, flash, decisions, focus_id, focus_state)] * hold_frames)
+    frames.extend([compose_frame(env, flash, decisions, focus_id, focus_state, focus_image)] * hold_frames)
     return frames
 
 
@@ -230,6 +278,11 @@ def main():
     ap.add_argument("--episodes", type=int, default=3)
     ap.add_argument("--fps", type=int, default=6)
     ap.add_argument("--seed", type=int, default=99)
+    ap.add_argument("--vision-checkpoint", default=None,
+                     help="path to a vision/train_vision.py checkpoint; when given, every robot's state "
+                          "is composed from vision-estimated obstacle/teammate perception instead of "
+                          "ground truth, and the model-input panel shows the focused robot's actual "
+                          "camera frame instead of raw JSON")
     args = ap.parse_args()
 
     import laya
@@ -237,13 +290,18 @@ def main():
     import imageio
 
     agent = laya.Agent(args.checkpoint, device="cuda" if torch.cuda.is_available() else "cpu")
+    perceiver = None
+    if args.vision_checkpoint:
+        from vision.perceive import VisionPerceiver
+        perceiver = VisionPerceiver(args.vision_checkpoint)
+
     env = SwarmEnv(gui=False)
     rng = random.Random(args.seed)
 
     all_frames = []
     for i, family in enumerate((["train"] * 2 + ["ood"])[:args.episodes]):
         print(f"recording episode {i + 1}/{args.episodes} ({family})...")
-        all_frames.extend(run_recorded_episode(env, rng, agent, family, hold_frames=args.fps))
+        all_frames.extend(run_recorded_episode(env, rng, agent, family, hold_frames=args.fps, perceiver=perceiver))
     env.close()
 
     print(f"encoding {len(all_frames)} frames -> {args.out}")
